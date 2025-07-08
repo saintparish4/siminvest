@@ -1,0 +1,691 @@
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/prisma"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum FundingStage {
+  PRE_SEED
+  SEED
+  SERIES_A
+  SERIES_B
+  SERIES_C
+  BRIDGE
+  IPO
+  OTHER
+}
+
+enum KYCStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum EntityType {
+  STARTUP
+  TOKEN
+  SIMULATION
+}
+
+enum UserRole {
+  INVESTOR
+  FOUNDER
+  ADMIN
+  MENTOR
+}
+
+enum FounderStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum PaymentStatus {
+  INITIATED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum Chain {
+  ETHEREUM
+  POLYGON
+  BASE
+  ARBITRUM
+  OTHER
+}
+
+enum DocumentType {
+  PITCH_DECK
+  SAFE
+  SAFT
+  KYC
+  FINANCIAL_STATEMENTS
+  LEGAL_DOCUMENTS
+  SIMULATION_REPORT
+  OTHER
+}
+
+enum SimulationStatus {
+  ACTIVE
+  COMPLETED
+  PAUSED
+  ARCHIVED
+}
+
+enum SimulationType {
+  INDIVIDUAL
+  COLLABORATIVE
+  TOURNAMENT
+  SCENARIO_BASED
+}
+
+enum AccreditationStatus {
+  PENDING
+  ACCREDITED
+  NON_ACCREDITED
+  PENDING_REVIEW
+}
+
+enum DealAccessLevel {
+  SIMULATION_ONLY
+  BASIC_ACCESS
+  FULL_ACCESS
+  PREMIUM_ACCESS
+}
+
+model User {
+  id                  String              @id @default(uuid())
+  name                String
+  email               String
+  emailVerified       Boolean             @default(false)
+  role                UserRole            @default(INVESTOR)
+  founderStatus       FounderStatus?
+  accreditationStatus AccreditationStatus @default(PENDING)
+  dealAccessLevel     DealAccessLevel     @default(SIMULATION_ONLY)
+
+  // Simulation Progress Tracking
+  totalSimulationScore Int @default(0)
+  completedSimulations Int @default(0)
+  simulationLevel      Int @default(1)
+
+  // Profile Information
+  bio                   String? @db.Text
+  profilePicture        String?
+  linkedinUrl           String?
+  location              String?
+  investmentPreferences Json? // Stores preferences as JSON
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations 
+  sessions              Session[]
+  accounts              Account[]
+  kycRecord             KYCRecord?
+  organizations         OrganizationMember[]
+  investments           Investment[]
+  simulationInvestments SimulationInvestment[]
+  notifications         Notification[]
+  startups              Startup[]               @relation("FounderStartups")
+  tokens                Token[]                 @relation("CreatorTokens")
+  adminLogs             AdminActivityLog[]      @relation("AdminLogs")
+  paymentIntents        PaymentIntent[]
+  wallets               Wallet[]
+  comments              Comment[]
+  simulations           Simulation[]            @relation("SimulationParticipants")
+  ownedSimulations      Simulation[]            @relation("SimulationOwner")
+  dealMatchings         DealMatching[]
+  userProgress          UserProgress[]
+  learningModules       UserLearningModule[]
+  leaderboardEntries    SimulationLeaderboard[]
+
+  @@index([email])
+  @@index([accreditationStatus])
+  @@index([dealAccessLevel])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String // Add a @unique if better-auth allows it
+  expiresAt DateTime
+  ipAddress String
+  userAgent String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  website     String?
+  logoUrl     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members  OrganizationMember[]
+  startups Startup[]
+  tokens   Token[]
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  role           String   @default("MEMBER") // ADMIN, MEMBER, VIEWER ---> COME BACK TO THIS COULD BE A PROBLEM
+  joinedAt       DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+}
+
+model Startup {
+  id           String       @id @default(uuid())
+  name         String
+  description  String       @db.Text
+  industry     String
+  stage        FundingStage
+  website      String?
+  pitchDeck    String?
+  fundingGoal  Decimal      @db.Decimal(18, 2)
+  amountRaised Decimal      @default(0) @db.Decimal(18, 2)
+  valuation    Decimal      @db.Decimal(18, 2)
+  isApproved   Boolean      @default(false) // COME BACK TO THIS
+  isActive     Boolean      @default(true)
+
+  // AI-Generated Fields for simulations
+  aiGeneratedMetrics Json?
+  simulationData     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  founderId      String
+  founder        User          @relation("FounderStartups", fields: [founderId], references: [id])
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  investments           Investment[]
+  simulationInvestments SimulationInvestment[]
+  dueDiligenceReports   DueDiligenceReport[]
+  documents             Document[]
+  comments              Comment[]
+  dealMatchings         DealMatching[]
+
+  @@index([industry])
+  @@index([stage])
+  @@index([isApproved])
+  @@index([founderId])
+}
+
+model Token {
+  id            String  @id @default(uuid())
+  name          String
+  symbol        String  @unique
+  description   String  @db.Text
+  totalSupply   Decimal @db.Decimal(38, 0)
+  tokenomics    String  @db.Text
+  whitepaperUrl String?
+  fundingGoal   Decimal @db.Decimal(18, 2)
+  currentPrice  Decimal @db.Decimal(18, 8)
+  isApproved    Boolean @default(false)
+  isActive      Boolean @default(true)
+
+  // Blockchain Information
+  contractAddress String?
+  chain           Chain?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creatorId      String
+  creator        User          @relation("CreatorTokens", fields: [creatorId], references: [id])
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  investments           Investment[]
+  simulationInvestments SimulationInvestment[]
+  dueDiligenceReports   DueDiligenceReport[]
+  documents             EntityDocument[]
+  comments              Comment[]
+  dealMatchings         DealMatching[]
+
+  @@index([symbol])
+  @@index([isApproved])
+  @@index([creatorId])
+}
+
+// NEW: Simulation System
+model Simulation {
+  id              String           @id @default(uuid())
+  title           String
+  description     String           @db.Text
+  type            SimulationType
+  status          SimulationStatus @default(ACTIVE)
+  maxParticipants Int              @default(100)
+  startDate       DateTime
+  endDate         DateTime
+
+  // Simulation Configuration
+  initialBudget   Decimal @db.Decimal(18, 2)
+  difficultyLevel Int     @default(1) // 1-5
+  scenarioData    Json // Market conditions, events, etc.
+
+  ownerId String
+  owner   User   @relation("SimulationOwner", fields: [ownerId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants User[]                  @relation("SimulationParticipants")
+  investments  SimulationInvestment[]
+  leaderboard  SimulationLeaderboard[]
+
+  @@index([type])
+  @@index([status])
+  @@index([startDate])
+}
+
+model SimulationInvestment {
+  id           String  @id @default(uuid())
+  simulationId String
+  userId       String
+  startupId    String?
+  tokenId      String?
+  amount       Decimal @db.Decimal(18, 2)
+  ownership    Decimal @db.Decimal(10, 4)
+
+  // Performance Tracking
+  currentValue Decimal @db.Decimal(18, 2)
+  roi          Decimal @db.Decimal(10, 4) // Return on Investment
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
+  startup    Startup?   @relation(fields: [startupId], references: [id])
+  token      Token?     @relation(fields: [tokenId], references: [id])
+
+  @@unique([simulationId, userId, startupId])
+  @@unique([simulationId, userId, tokenId])
+  @@index([simulationId])
+  @@index([userId])
+}
+
+model SimulationLeaderboard {
+  id           String  @id @default(uuid())
+  simulationId String
+  userId       String
+  rank         Int
+  totalReturn  Decimal @db.Decimal(18, 2)
+  roiPercent   Decimal @db.Decimal(10, 4)
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@unique([simulationId, userId])
+  @@index([simulationId, rank])
+}
+
+// NEW: AI Deal Matching System
+model DealMatching {
+  id            String  @id @default(uuid())
+  userId        String
+  startupId     String?
+  tokenId       String?
+  matchScore    Decimal @db.Decimal(5, 4) // 0-1 confidence score
+  reasoning     String  @db.Text
+  isRecommended Boolean @default(true) // COME BACK TO THIS
+  userFeedback  String? // "interested", "not_interested", "invested"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id])
+  startup Startup? @relation(fields: [startupId], references: [id])
+  token   Token?   @relation(fields: [tokenId], references: [id])
+
+  @@index([userId])
+  @@index([matchScore])
+  @@index([isRecommended])
+}
+
+// NEW: Learning and Progress Tracking
+model LearningModule {
+  id          String  @id @default(uuid())
+  title       String
+  description String  @db.Text
+  content     String  @db.Text
+  category    String // "investing_basics", "due_diligence", "valuation", "fundraising", etc.
+  difficulty  Int     @default(1) // 1-5
+  order       Int     @default(0)
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userLearningModules UserLearningModule[]
+
+  @@index([category])
+  @@index([difficulty])
+}
+
+model UserLearningModule {
+  id               String    @id @default(uuid())
+  userId           String
+  learningModuleId String
+  completed        Boolean   @default(false)
+  score            Int? // Quiz score if applicable
+  completedAt      DateTime?
+
+  user           User           @relation(fields: [userId], references: [id])
+  learningModule LearningModule @relation(fields: [learningModuleId], references: [id])
+
+  @@unique([userId, learningModuleId])
+  @@index([userId])
+  @@index([completed])
+}
+
+model UserProgress {
+  id                    String  @id @default(uuid())
+  userId                String  @unique
+  totalScore            Int     @default(0)
+  currentLevel          Int     @default(1)
+  completedSimulations  Int     @default(0)
+  successfulInvestments Int     @default(0)
+  averageROI            Decimal @default(0) @db.Decimal(10, 4)
+
+  // Skill Tracking
+  valuationSkill      Int @default(0) // 0-100
+  dueDiligenceSkill   Int @default(0) // 0-100
+  riskAssessmentSkill Int @default(0) // 0-100
+
+  lastActivityAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([currentLevel])
+  @@index([totalScore])
+}
+
+model Investment {
+  id        String  @id @default(uuid())
+  userId    String
+  startupId String?
+  tokenId   String?
+  amount    Decimal @db.Decimal(18, 2)
+  ownership Decimal @db.Decimal(10, 4)
+
+  // Investment Terms
+  valuation Decimal? @db.Decimal(18, 2)
+  terms     Json? // SAFE terms, equity details, etc.
+
+  // Status tracking
+  status String @default("PENDING") // PENDING, CONFIRMED, CANCELLED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id])
+  startup Startup?          @relation(fields: [startupId], references: [id])
+  token   Token?            @relation(fields: [tokenId], references: [id])
+  vesting VestingSchedule[]
+
+  @@unique([userId, startupId])
+  @@unique([userId, tokenId])
+  @@index([userId])
+  @@index([status])
+}
+
+model VestingSchedule {
+  id           String   @id @default(uuid())
+  investmentId String
+  cliffDate    DateTime
+  unlockDate   DateTime
+  percentage   Decimal  @db.Decimal(10, 4)
+  isUnlocked   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  investment Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+
+  @@index([unlockDate])
+  @@index([isUnlocked])
+}
+
+model KYCRecord {
+  id                  String              @id @default(uuid())
+  userId              String              @unique
+  status              KYCStatus           @default(PENDING)
+  accreditationStatus AccreditationStatus @default(PENDING)
+  reason              String?
+  documentUrls        String? // Array of document URLs
+  verificationData    Json? // Additional verification data
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([accreditationStatus])
+}
+
+model DueDiligenceReport {
+  id         String     @id @default(uuid())
+  entityType EntityType
+  entityId   String
+  summary    String     @db.Text
+  riskScore  Int // 0-100
+  sentiment  String?
+
+  // Detailed Analysis
+  financialScore  Int? // 0-100
+  teamScore       Int? // 0-100
+  marketScore     Int? // 0-100
+  technologyScore Int? // 0-100
+
+  aiGenerated Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Startup   Startup? @relation(fields: [startupId], references: [id])
+  startupId String?
+  Token     Token?   @relation(fields: [tokenId], references: [id])
+  tokenId   String?
+
+  @@index([entityType, entityId])
+  @@index([riskScore])
+}
+
+model AdminActivityLog {
+  id         String      @id @default(uuid())
+  adminId    String
+  action     String
+  targetId   String?
+  targetType EntityType?
+  details    Json?
+  timestamp  DateTime    @default(now())
+
+  admin User @relation("AdminLogs", fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([action])
+  @@index([timestamp])
+}
+
+model PaymentIntent {
+  id         String        @id @default(uuid())
+  userId     String
+  provider   String // STRIPE, PAYPAL, etc.
+  providerId String
+  amount     Decimal       @db.Decimal(18, 2)
+  currency   String        @default("USD")
+  status     PaymentStatus @default(INITIATED)
+  metadata   Json?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([provider])
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String
+  address   String
+  chain     Chain
+  nickname  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user User       @relation(fields: [userId], references: [id])
+  txs  CryptoTx[]
+
+  @@unique([chain, address])
+  @@index([userId])
+}
+
+model CryptoTx {
+  id          String        @id @default(uuid())
+  walletId    String
+  entityType  EntityType
+  entityId    String
+  txHash      String        @unique
+  amount      Decimal       @db.Decimal(38, 18)
+  status      PaymentStatus
+  blockNumber BigInt?
+  gasUsed     BigInt?
+  timestamp   DateTime      @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+model Document {
+  id         String       @id @default(uuid())
+  url        String
+  title      String
+  type       DocumentType
+  fileSize   Int?
+  mimeType   String?
+  uploadedBy String?
+  isActive   Boolean      @default(true)
+  createdAt  DateTime     @default(now())
+
+  entities  EntityDocument[]
+  Startup   Startup?         @relation(fields: [startupId], references: [id])
+  startupId String?
+}
+
+model EntityDocument {
+  id         String     @id @default(uuid())
+  entityType EntityType
+  entityId   String
+  documentId String
+  visibility String     @default("PUBLIC") // PUBLIC, PRIVATE, ORGANIZATION
+  createdAt  DateTime   @default(now())
+
+  document Document @relation(fields: [documentId], references: [id])
+  Token    Token?   @relation(fields: [tokenId], references: [id])
+  tokenId  String?
+
+  @@index([entityType, entityId])
+  @@index([visibility])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String // "investment_opportunity", "simulation_complete", etc. ---> COME BACK TO THIS
+  title     String
+  message   String   @db.Text
+  data      Json? // Additional data for the notification
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, read])
+  @@index([createdAt])
+  @@index([type])
+}
+
+model Comment {
+  id         String     @id @default(uuid())
+  userId     String
+  entityType EntityType
+  entityId   String
+  body       String     @db.Text
+  parentId   String?
+  isEdited   Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id])
+  startup   Startup? @relation(fields: [startupId], references: [id])
+  startupId String?
+  token     Token?   @relation(fields: [tokenId], references: [id])
+  tokenId   String?
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+}
